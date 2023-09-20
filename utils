@@ -1,0 +1,113 @@
+
+import os
+from typing import Tuple
+
+import pandas as pd
+
+from sklearn.preprocessing import OneHotEncoder, LabelEncoder
+
+
+# %%
+def _ohe_column(df:pd.DataFrame, col_name:str)->tuple:
+    # function for OHE
+    assert isinstance(col_name, str)
+
+    # setting sparse to True will return a scipy.sparse.csr.csr_matrix
+    # not a numpy array
+    encoder = OneHotEncoder(sparse=False)
+    ohe_cat = encoder.fit_transform(df[col_name].values.reshape(-1, 1))
+    cols_added = [f"{col_name}_{i}" for i in range(ohe_cat.shape[-1])]
+
+    df[cols_added] = ohe_cat
+
+    df.pop(col_name)
+
+    return df, cols_added, encoder
+
+def le_column(df:pd.DataFrame, col_name)->tuple:
+    """label encode a column in dataframe"""
+    encoder = LabelEncoder()
+    df[col_name] = encoder.fit_transform(df[col_name])
+    return df, encoder
+
+# %%
+
+def _load_data(
+        input_features:list=None,
+)->Tuple[pd.DataFrame, pd.DataFrame, list]:
+
+    default_input_features = ['Adsorbent', 'Feedstock', 'Pyrolysis_temp',
+                              'Heating rate (oC)', 'Pyrolysis_time (min)',
+                              'C', 'O', 'Surface area', 'Adsorption_time (min)',
+                              'Ci_ppm', 'solution pH', 'rpm', 'Volume (L)',
+                              'loading (g)', 'adsorption_temp',
+                              'Ion Concentration (mM)', 'ion_type']
+
+    if input_features is None:
+        input_features = default_input_features
+
+    # read excel
+    # our data is on the first sheet
+    dirname = os.path.dirname(__file__)
+    org_data = pd.read_excel(os.path.join(dirname, 'master_sheet_0802.xlsx'))
+    data = org_data
+    data.dropna()
+
+    # removing final concentration and rpm from our data. As rpm only
+    # contains one unique value and final concentration is used for
+    # calculating the true value of target.
+
+    #data = data.drop(columns=['Cf', 'rpm'])
+
+    #removing original index of both dataframes and assigning a new index
+    data = data.reset_index(drop=True)
+
+    target = ['qe']
+
+    if input_features is None:
+        input_features = data.columns.tolist()[0:-1]
+    else:
+        assert isinstance(input_features, list)
+        assert all([feature in data.columns for feature in input_features])
+
+    data = data[input_features + target]
+    data = data.dropna()
+
+    data['Feedstock'] = data['Feedstock'].replace('coagulation–flocculation sludge',
+                                                  'CF Sludge')
+
+    data['Feedstock'] = data['Feedstock'].replace('bamboo (Phyllostachys pubescens)',
+                                                  'bamboo (PP)')
+
+    return org_data, data, input_features
+
+def make_data(
+        input_features:list = None,
+        encoding:str = None,
+)->Tuple[pd.DataFrame, list, dict]:
+
+    _, data, input_features = _load_data(input_features)
+
+    adsorbent_encoder, fs_encoder, it_encoder  = None, None, None
+    if encoding=="ohe":
+        # applying One Hot Encoding
+        data, _, adsorbent_encoder = _ohe_column(data, 'Adsorbent')
+        data, _, fs_encoder = _ohe_column(data, 'Feedstock')
+        data, _, it_encoder = _ohe_column(data, 'ion_type')
+
+    elif encoding == "le":
+        # applying Label Encoding
+        data, adsorbent_encoder = le_column(data, 'Adsorbent')
+        data, fs_encoder = le_column(data, 'Feedstock')
+        data, it_encoder = le_column(data, 'ion_type')
+
+    # moving target to last
+    target = data.pop('qe')
+    data['qe'] = target
+
+    encoders = {
+        "Adsorbent": adsorbent_encoder,
+        "Feedstock": fs_encoder,
+        "ion_type": it_encoder
+    }
+    return data, input_features, encoders
