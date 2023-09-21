@@ -13,7 +13,7 @@ import numpy as np
 from ai4water import Model
 from ai4water.utils import TrainTestSplit
 
-from utils import make_data
+from .utils import make_data
 
 # %%
 
