@@ -2,3 +2,4 @@ git+https://github.com/Sara-Iftikhar/easy_mpl.git@19dcba30921d84a043df87283c7eb4
 git+https://github.com/AtrCheema/AI4Water.git@7d702646399956496bb1f3770cb841c073cf56db
 ngboost
 joblib==1.3.2
+numpy==1.23.5
