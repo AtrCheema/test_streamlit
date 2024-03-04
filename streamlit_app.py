@@ -6,6 +6,11 @@ from ai4water.backend import sklearn_models
 from ngboost import NGBRegressor
 sklearn_models['NGBRegressor'] = NGBRegressor
 
+
+import joblib
+from typing import Tuple
+
+import xgboost as xgb
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -13,13 +18,9 @@ import numpy as np
 from ai4water import Model
 from ai4water.utils import TrainTestSplit
 
-import os
-from typing import Tuple
-
-import pandas as pd
-
 from sklearn.preprocessing import OneHotEncoder, LabelEncoder
 
+from xgboostlss.model import XGBoostLSS
 
 # %%
 def _ohe_column(df:pd.DataFrame, col_name:str)->tuple:
@@ -146,10 +147,22 @@ class ModelHandler(object):
             groups=self.train_data['Adsorbent'])
 
     def load_model(self):
+
         model_path = os.path.join(os.getcwd(), "models", self.name)
-        conf_path = os.path.join(model_path, "config.json")
-        model_ = Model.from_config_file(conf_path)
-        model_.update_weights(os.path.join(model_path, self.weights[self.name]))
+
+        if self.name == "XGBoostLSS":
+            
+            model_ = joblib.load(os.path.join(model_path, "XGBoostLSS"))
+            model_.num_ins = 17
+            model_.input_features = ['Adsorbent', 'Feedstock', 'Pyrolysis_temp', 'Heating rate (oC)',
+       'Pyrolysis_time (min)', 'C', 'O', 'Surface area',
+       'Adsorption_time (min)', 'Ci_ppm', 'solution pH', 'rpm', 'Volume (L)',
+       'loading (g)', 'adsorption_temp', 'Ion Concentration (mM)', 'ion_type']
+        else:
+            conf_path = os.path.join(model_path, "config.json")
+            model_ = Model.from_config_file(conf_path)
+            model_.update_weights(os.path.join(model_path, self.weights[self.name]))
+
         return model_
 
     def make_prediction(self, inputs:list):
@@ -164,7 +177,22 @@ class ModelHandler(object):
         df.loc[0, 'Feedstock'] = self.transform_categorical('Feedstock', df.loc[0, 'Feedstock'])
         df.loc[0, 'ion_type'] = self.transform_categorical('ion_type', df.loc[0, 'ion_type'])
 
-        pred = self.model.predict(df.values.reshape(1, -1))
+        if self.name == "XGBoostLSS":
+            dtrain = xgb.DMatrix(df.values, nthread=1)
+            pred_samples = self.model.predict(dtrain,
+                              pred_type="samples",
+                              n_samples=1000,
+                              seed=123)
+
+            preds = np.exp(pred_samples)
+            if preds.shape[1] == 1:
+                pred = preds.mean(axis=0)
+            else:
+                pred = preds.mean(axis=1)
+            print(type(pred), pred.shape, preds.shape, type(preds))
+        else:
+
+            pred = self.model.predict(df.values.reshape(1, -1))
         if len(pred) == 1:
             pred = pred[0]
         return pred
@@ -187,7 +215,7 @@ st.title('ML-based prediction of $q_{e}$ of Biochar for $PO_{4}$')
 with st.sidebar.expander("**Model Selection**", expanded=True):
     seleted_model = st.selectbox(
         "Select a Model",
-        options=['NGBoost', 'RandomForest', 'CatBoost', 'XGBoost'],
+        options=['NGBoost', 'RandomForest', 'CatBoost', 'XGBoost', 'XGBoostLSS'],
         help='select the machine learning model which will be used for prediction',
     )
 
