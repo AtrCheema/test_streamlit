@@ -11,7 +11,6 @@ from tqdm import tqdm
 
 from typing import Any, Dict, Optional, List, Tuple
 import matplotlib.pyplot as plt
-import seaborn as sns
 import warnings
 
 from xgboostlss import distributions
@@ -668,14 +667,6 @@ class MixtureDistributionClass:
             dist_samples = best_dist_sel.draw_samples(fitted_params,
                                                       n_samples=n_samples,
                                                       seed=123).values
-
-            # Plot actual and fitted distribution
-            plt.figure(figsize=figure_size)
-            sns.kdeplot(target.reshape(-1,), label="Actual")
-            sns.kdeplot(dist_samples.reshape(-1,), label=f"Best-Fit: {best_dist['distribution'].values[0]}")
-            plt.legend()
-            plt.title("Actual vs. Best-Fit Density", fontweight="bold", fontsize=16)
-            plt.show()
 
         fit_df.drop(columns=["rank", "params", "dist_pos", "M"], inplace=True)
 
