@@ -17,6 +17,9 @@ import numpy as np
 
 from ai4water import Model
 from ai4water.utils import TrainTestSplit
+from tensorflow.keras.layers import Dense, Dropout, Input
+from tensorflow.keras import Model as tens_Model
+from tensorflow.keras.optimizers import Adam
 
 from sklearn.preprocessing import OneHotEncoder, LabelEncoder
 
@@ -129,10 +132,28 @@ def make_data(
 
 # %%
 
+def build_monte_carlo_model():
+
+    inp = Input(shape= (17,) )
+    d1 = Dense(32)(inp)
+    drop1 = Dropout(0.3)(d1)
+    d2 = Dense(32)(drop1)
+    drop2 = Dropout(0.3)(d2)
+    d3 = Dense(32, activation="relu")(drop2)
+    drop3 = Dropout(0.3)(d3)
+    out = Dense(1)(drop3)
+
+    model = tens_Model(inp, out)
+    model.compile(loss="mse", optimizer=Adam(lr=0.0001))
+    return model
+
+
+
 class ModelHandler(object):
 
     weights = {
-        'NGBoost': 'NGBRegressor'
+        'NGBoost': 'NGBRegressor',
+        'Monte Carlo Dropout': 'weights'
     }
 
     def __init__(self, model_name):
@@ -158,6 +179,19 @@ class ModelHandler(object):
        'Pyrolysis_time (min)', 'C', 'O', 'Surface area',
        'Adsorption_time (min)', 'Ci_ppm', 'solution pH', 'rpm', 'Volume (L)',
        'loading (g)', 'adsorption_temp', 'Ion Concentration (mM)', 'ion_type']
+        elif self.name == "Monte Carlo Dropout":
+
+            # Load the model architecture
+            model_ = build_monte_carlo_model()
+
+            model_.num_ins = 17
+            model_weights = os.path.join(model_path, "weights.hdf5")
+            model_.load_weights(model_weights)
+            model_.input_features = ['Adsorbent', 'Feedstock', 'Pyrolysis_temp', 'Heating rate (oC)',
+                                     'Pyrolysis_time (min)', 'C', 'O', 'Surface area',
+                                     'Adsorption_time (min)', 'Ci_ppm', 'solution pH', 'rpm', 'Volume (L)',
+                                     'loading (g)', 'adsorption_temp', 'Ion Concentration (mM)', 'ion_type']
+
         else:
             conf_path = os.path.join(model_path, "config.json")
             model_ = Model.from_config_file(conf_path)
@@ -177,6 +211,9 @@ class ModelHandler(object):
         df.loc[0, 'Feedstock'] = self.transform_categorical('Feedstock', df.loc[0, 'Feedstock'])
         df.loc[0, 'ion_type'] = self.transform_categorical('ion_type', df.loc[0, 'ion_type'])
 
+        # Ensure that all columns in df are of numeric type
+        df = df.astype(float)
+
         if self.name == "XGBoostLSS":
             dtrain = xgb.DMatrix(df.values, nthread=1)
             pred_samples = self.model.predict(dtrain,
@@ -190,12 +227,39 @@ class ModelHandler(object):
             else:
                 pred = preds.mean(axis=1)
             print(type(pred), pred.shape, preds.shape, type(preds))
+            # Calculating upper and lower limit
+            max_limit_ = pred + 5
+            min_limit_ = pred - 5
+        elif self.name == "Monte Carlo Dropout":
+            inputs = df.values.reshape(1, -1)
+
+            n = 100
+            train_pred = np.full(shape=(n, inputs.shape[0]), fill_value=np.nan)
+            for i in range(n):
+                train_pred[i] = self.model(inputs, training=True).numpy().reshape(-1, )
+            tr_mean = np.mean(train_pred, axis=0)
+
+            # Calculating Upper Limit
+            max_limit_ = np.max(train_pred, axis=0)
+
+            # Calculating Lower Limit
+            min_limit_ = np.min(train_pred, axis=0)
+
+            print('limits: ', min_limit_, max_limit_)
+
+            pred = float(tr_mean)
+
         else:
 
             pred = self.model.predict(df.values.reshape(1, -1))
-        if len(pred) == 1:
-            pred = pred[0]
-        return pred
+            max_limit_ = pred + 5
+            min_limit_ = pred - 5
+        if isinstance(pred, np.ndarray):
+            if len(pred) == 1:
+                pred = pred[0]
+            else:
+                raise ValueError
+        return pred, float(max_limit_), float(min_limit_)
 
     def transform_categorical(self, feature: str, category: str) -> int:
         assert isinstance(category, str)
@@ -215,7 +279,7 @@ st.title('ML-based prediction of $q_{e}$ of Biochar for $PO_{4}$')
 with st.sidebar.expander("**Model Selection**", expanded=True):
     seleted_model = st.selectbox(
         "Select a Model",
-        options=['NGBoost', 'RandomForest', 'CatBoost', 'XGBoost', 'XGBoostLSS'],
+        options=['NGBoost', 'Monte Carlo Dropout', 'XGBoostLSS'],
         help='select the machine learning model which will be used for prediction',
     )
 
@@ -287,13 +351,17 @@ with st.form('key1'):
 
 mh = ModelHandler(seleted_model)
 
-point_prediction = mh.make_prediction(
+point_prediction, max_limit, min_limit = mh.make_prediction(
     [adsorbent, feedstock, pyrol_temp, heat_rate, pyrol_time,
      c, o, surface_area, ads_time, ci, sol_ph,
      rpm, vol, loading, ads_temp, ion_conc, ion_type]
 )
 point_prediction = round(point_prediction, 4)
+upper_limit = round(max_limit, 4)
+lower_limit = round(min_limit, 4)
+
 # %%
+
 colors=["#002244", "#ff0066", "#66cccc", "#ff9933", "#337788",
           "#429e79", "#474747", "#f7d126", "#ee5eab", "#b8b8b8"]
 
@@ -309,10 +377,10 @@ col2.markdown(
     f"font-weight: bold; font-size: 20px;'> Upper Limit</p>",
     unsafe_allow_html=True,
 )
-col2.text(point_prediction + 5)
+col2.text(upper_limit)
 col3.markdown(
     f"<p style='color: {colors[1]}; "
     f"font-weight: bold; font-size: 20px;'> Lower Limit</p>",
     unsafe_allow_html=True,
 )
-col3.text(point_prediction - 5)
+col3.text(lower_limit)
