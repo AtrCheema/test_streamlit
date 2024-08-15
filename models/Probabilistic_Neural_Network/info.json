@@ -1,0 +1,25 @@
+{
+    "model_parameters": 830,
+    "training_end": "20231003_140340",
+    "training_start": "20231003_140226",
+    "training_time_in_minutes": 1.24,
+    "version_info": {
+        "SeqMetrics": "1.3.4",
+        "ai4water": "1.07",
+        "easy_mpl": "0.21.4",
+        "h5py": "3.1.0",
+        "keras.api._v2.keras": "2.10.0",
+        "lightgbm": "3.3.1",
+        "matplotlib": "3.7.0",
+        "numpy": "1.23.5",
+        "optuna": "3.3.0",
+        "os": "nt",
+        "pandas": "1.5.3",
+        "python": "3.9.18 (main, Sep 11 2023, 14:09:26) [MSC v.1916 64 bit (AMD64)]",
+        "seaborn": "0.12.1",
+        "sklearn": "1.0.2",
+        "skopt": "0.9.0",
+        "tensorflow": "2.10.1",
+        "xgboost": "1.6.2"
+    }
+}

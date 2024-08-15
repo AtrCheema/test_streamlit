@@ -1,5 +1,6 @@
 
 import os
+import tensorflow
 
 from ai4water.backend import sklearn_models
 
@@ -17,10 +18,11 @@ import numpy as np
 
 from ai4water import Model
 from ai4water.utils import TrainTestSplit
-from tensorflow.keras.layers import Dense, Dropout, Input
+from tensorflow.keras.layers import Dense, Dropout, Input, Concatenate, BatchNormalization
 from tensorflow.keras import Model as tens_Model
-from tensorflow.keras.optimizers import Adam
-
+from tensorflow.keras.optimizers import Adam, RMSprop
+from tensorflow.math import reduce_mean, log, square
+import tensorflow_probability as tfp
 from sklearn.preprocessing import OneHotEncoder, LabelEncoder
 
 from xgboostlss.model import XGBoostLSS
@@ -147,13 +149,37 @@ def build_monte_carlo_model():
     model.compile(loss="mse", optimizer=Adam(lr=0.0001))
     return model
 
+def build_bayesian_nn_model():
 
+    # Define the negative log likelihood loss function
+    def negative_loglikelihood(targets, estimated_distribution):
+        return -estimated_distribution.log_prob(targets)
+
+    # Define the model architecture
+    hidden_units= [19, 19]
+    inputs = Input(shape=(17,), name='Inputs')
+
+    features = BatchNormalization()(inputs)
+    for units in hidden_units:
+        features = Dense(units, activation='sigmoid')(features)
+
+    distribution_params = Dense(units=2)(features)
+    outputs = tfp.layers.IndependentNormal(1)(distribution_params)
+
+    model = tens_Model(inputs=inputs, outputs=outputs)
+
+    # Compile the model
+    model.compile(optimizer= RMSprop(learning_rate=0.002850512),
+                  loss= negative_loglikelihood)
+
+    return model
 
 class ModelHandler(object):
 
     weights = {
         'NGBoost': 'NGBRegressor',
-        'Monte Carlo Dropout': 'weights'
+        'Monte Carlo Dropout': 'weights',
+        'Probabilistic_Neural_Network': 'weights'
     }
 
     def __init__(self, model_name):
@@ -183,6 +209,19 @@ class ModelHandler(object):
 
             # Load the model architecture
             model_ = build_monte_carlo_model()
+
+            model_.num_ins = 17
+            model_weights = os.path.join(model_path, "weights.hdf5")
+            model_.load_weights(model_weights)
+            model_.input_features = ['Adsorbent', 'Feedstock', 'Pyrolysis_temp', 'Heating rate (oC)',
+                                     'Pyrolysis_time (min)', 'C', 'O', 'Surface area',
+                                     'Adsorption_time (min)', 'Ci_ppm', 'solution pH', 'rpm', 'Volume (L)',
+                                     'loading (g)', 'adsorption_temp', 'Ion Concentration (mM)', 'ion_type']
+
+        elif self.name == "Probabilistic_Neural_Network":
+
+            # Load the model architecture
+            model_ = build_bayesian_nn_model()
 
             model_.num_ins = 17
             model_weights = os.path.join(model_path, "weights.hdf5")
@@ -249,6 +288,23 @@ class ModelHandler(object):
 
             pred = float(tr_mean)
 
+        elif self.name == "Probabilistic_Neural_Network":
+            inputs = df.values.reshape(1, -1)
+
+            train_dist = self.model(inputs)
+            train_mean = train_dist.mean().numpy().reshape(-1, )
+            train_std = train_dist.stddev().numpy().reshape(-1, )
+
+            # Calculating Upper Limit
+            max_limit_ = train_mean + train_std
+
+            # Calculating Lower Limit
+            min_limit_ = train_mean - train_std
+
+            print('limits: ', min_limit_, max_limit_)
+
+            pred = float(train_mean)
+
         else:
 
             pred = self.model.predict(df.values.reshape(1, -1))
@@ -279,7 +335,7 @@ st.title('ML-based prediction of $q_{e}$ of Biochar for $PO_{4}$')
 with st.sidebar.expander("**Model Selection**", expanded=True):
     seleted_model = st.selectbox(
         "Select a Model",
-        options=['NGBoost', 'Monte Carlo Dropout', 'XGBoostLSS'],
+        options=['NGBoost', 'Monte Carlo Dropout', 'XGBoostLSS', 'Probabilistic_Neural_Network'],
         help='select the machine learning model which will be used for prediction',
     )
 
