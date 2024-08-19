@@ -1,6 +1,9 @@
 
 import os
+from typing import Union
 import tensorflow
+from io import StringIO
+
 
 from ai4water.backend import sklearn_models
 
@@ -21,7 +24,6 @@ from ai4water.utils import TrainTestSplit
 from tensorflow.keras.layers import Dense, Dropout, Input, Concatenate, BatchNormalization
 from tensorflow.keras import Model as tens_Model
 from tensorflow.keras.optimizers import Adam, RMSprop
-from tensorflow.math import reduce_mean, log, square
 import tensorflow_probability as tfp
 from sklearn.preprocessing import OneHotEncoder, LabelEncoder
 
@@ -238,14 +240,27 @@ class ModelHandler(object):
 
         return model_
 
-    def make_prediction(self, inputs:list):
+    def make_prediction(self, inputs:Union[list, pd.DataFrame]):
 
-        assert len(inputs) == self.model.num_ins
+        # Check whether it is a list or dataframe
+        if isinstance(inputs, list):
+            # If it is a list, then we have one sample case
+            num_samples = 1
+            # Make sure that length of inputs == number of input features
+            assert len(inputs) == self.model.num_ins
+            df = pd.DataFrame(
+                np.array(inputs).reshape(1, -1),  # Reshape to (1, -1) for a single sample
+                columns=self.model.input_features
+            )
+        elif isinstance(inputs, pd.DataFrame):
+            # If it is a dataframe then we have to calculate num_samples
+            num_samples = inputs.shape[0]  # Number of rows in the dataframe
+            # Make sure that shape of dataframe == (num_samples, number of input features)
+            assert inputs.shape[1] == self.model.num_ins
+            df = inputs  # The DataFrame is already in the correct shape, no need to reshape
+        else:
+            raise ValueError("Inputs must be a list (for single sample) or a pandas DataFrame.")
 
-        df = pd.DataFrame(
-            np.array(inputs).reshape(1,-1),
-            columns=self.model.input_features
-        )
         df.loc[0, 'Adsorbent'] = self.transform_categorical('Adsorbent', df.loc[0, 'Adsorbent'])
         df.loc[0, 'Feedstock'] = self.transform_categorical('Feedstock', df.loc[0, 'Feedstock'])
         df.loc[0, 'ion_type'] = self.transform_categorical('ion_type', df.loc[0, 'ion_type'])
@@ -270,24 +285,40 @@ class ModelHandler(object):
             max_limit_ = pred + 5
             min_limit_ = pred - 5
         elif self.name == "Monte Carlo Dropout":
-            inputs = df.values.reshape(1, -1)
+            inputs = df.values
 
             n = 100
-            train_pred = np.full(shape=(n, inputs.shape[0]), fill_value=np.nan)
+            num_samples = inputs.shape[0]  # Number of samples
+            train_pred = np.full(shape=(n, num_samples), fill_value=np.nan)
+
+            # Perform the dropout-based prediction multiple times
             for i in range(n):
                 train_pred[i] = self.model(inputs, training=True).numpy().reshape(-1, )
+
             tr_mean = np.mean(train_pred, axis=0)
 
-            # Calculating Upper Limit
+            # Calculating Upper and Lower Limits
             max_limit_ = np.max(train_pred, axis=0)
-
-            # Calculating Lower Limit
             min_limit_ = np.min(train_pred, axis=0)
 
             print('limits: ', min_limit_, max_limit_)
 
-            pred = float(tr_mean)
+            if num_samples == 1:
+                # If num_samples == 1, convert the outputs to float
+                tr_mean = float(tr_mean)
+                max_limit_ = float(max_limit_)
+                min_limit_ = float(min_limit_)
 
+                # Ensure that the outputs are of type float
+                assert isinstance(tr_mean, float)
+                assert isinstance(max_limit_, float)
+                assert isinstance(min_limit_, float)
+            else:
+                # If there are multiple samples, we return the arrays as they are
+                # No further action is needed
+                pass
+
+            pred = tr_mean
         elif self.name == "Probabilistic_Neural_Network":
             inputs = df.values.reshape(1, -1)
 
@@ -306,7 +337,7 @@ class ModelHandler(object):
             pred = float(train_mean)
 
         else:
-
+            # NGBoost
             pred = self.model.predict(df.values.reshape(1, -1))
             max_limit_ = pred + 5
             min_limit_ = pred - 5
@@ -323,6 +354,65 @@ class ModelHandler(object):
         assert len(category_as_num) == 1
         return category_as_num[0]
 # %%
+def file_processing(uploaded_file):
+    # Check if the file is a CSV or Excel
+    if uploaded_file is not None:
+        # Read the file based on extension
+        if uploaded_file.name.endswith('.csv'):
+            data = pd.read_csv(uploaded_file)
+        elif uploaded_file.name.endswith('.xlsx'):
+            data = pd.read_excel(uploaded_file)
+        else:
+            st.error("Unsupported file type! Please upload a CSV or Excel file.")
+            return None
+
+        return data
+    else:
+        st.error("No file uploaded!")
+        return None
+
+def batch_prediction(uploaded_file, model_handler):
+
+    # Process the uploaded file to get the data
+    data = file_processing(uploaded_file)
+
+    if data is not None:
+        # Dropping None values
+        data = data.dropna()
+
+        # Convert the data into numpy arrays
+        inputs = data.values
+
+        # Initialize lists to collect predictions and limits
+        point_predictions = []
+        upper_limits = []
+        lower_limits = []
+
+        # Perform prediction for the batch and collect results
+        for i in range(len(inputs)):
+            row = inputs[i, :].tolist()
+            try:
+                pred, maxlimit, minlimit = model_handler.make_prediction(row)
+                point_predictions.append(round(pred, 4))
+                upper_limits.append(round(maxlimit, 4))
+                lower_limits.append(round(minlimit, 4))
+            except ValueError as e:
+                st.error(f"Error processing sample {i + 1}: {e}")
+                point_predictions.append("Error")
+                upper_limits.append("Error")
+                lower_limits.append("Error")
+
+        # Prepare a DataFrame for display
+        results_df = pd.DataFrame({
+            "Sample": range(1, len(inputs) + 1),
+            "Point Prediction": point_predictions,
+            "Upper Limit": upper_limits,
+            "Lower Limit": lower_limits
+        })
+
+        # Display the final results in a single table
+        st.write("### Batch Prediction Results")
+        st.table(results_df)
 
 st.set_page_config(
     page_title="Probabilitic Prediction",
@@ -341,11 +431,21 @@ with st.sidebar.expander("**Model Selection**", expanded=True):
 
 
 with st.sidebar.expander("**Batch Prediction**", expanded=True):
-    X = st.file_uploader(
-    "Upload a csv file", type="csv", help="""Load the csv file which contains your own data.
+    uploaded_file = st.file_uploader(
+    "Upload a csv or excel file", type=["csv", "xlsx"], help="""Load the csv file which contains your own data.
     The machine learning model will make prediction on the whole data from csv file.! 
     """
     )
+
+    # Perform batch prediction if a file is uploaded
+    if uploaded_file is not None:
+        st.write("File uploaded successfully! Processing...")
+
+        # Initialize model handler after model selection
+        mh = ModelHandler(seleted_model)
+
+        # Call the batch prediction function
+        batch_prediction(uploaded_file, mh)
 
 
 with st.sidebar.expander("**Retrain**", expanded=True):
